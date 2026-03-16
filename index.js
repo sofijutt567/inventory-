@@ -7,7 +7,7 @@ const app = express();
 app.use(cors());
 app.use(express.json());
 
-// API Keys loading from .env
+// 1. API Keys Loading
 const API_KEYS = [
     process.env.GROQ_API_KEY_1,
     process.env.GROQ_API_KEY_2,
@@ -17,20 +17,23 @@ const API_KEYS = [
 ].filter(key => key);
 
 app.get('/', (req, res) => {
-    res.send('🚀 PharmPro Multi-Key Parallel AI Engine is LIVE!');
+    res.send('🚀 PharmPro Multi-Key (No-Expiry Mode) is LIVE!');
 });
 
-// Helper function to call Groq API
+// 2. Helper function to call Groq API
 async function callGroq(apiKey, subPrompt) {
     const response = await axios.post("https://api.groq.com/openai/v1/chat/completions", {
         model: "llama-3.3-70b-versatile",
         messages: [
             {
                 role: "system",
-                content: `You are a Pharmacy Data Expert.
-                Return ONLY JSON with root key "medicines". 
-                Fields: name, power, qty, price, expiry (YYYY-MM-DD).
-                Use real brand names. Realistic prices in PKR.`
+                content: `You are a Pharmacy Data Expert. 
+                STRICT RULES:
+                1. Return ONLY JSON with root key "medicines".
+                2. Fields MUST be: name, power, qty, price.
+                3. DO NOT generate or include "expiry" field. 
+                4. Use real Pakistani brand names and realistic PKR prices.
+                5. Return exactly the number of medicines requested.`
             },
             { role: "user", content: subPrompt }
         ],
@@ -44,9 +47,13 @@ async function callGroq(apiKey, subPrompt) {
     // Safety check for JSON parsing
     const content = response.data.choices[0].message.content;
     const data = typeof content === 'string' ? JSON.parse(content) : content;
-    return data.medicines || [];
+    
+    // Clean data: Ensure no expiry field sneaks in
+    const cleanedMedicines = (data.medicines || []).map(({ expiry, ...rest }) => rest);
+    return cleanedMedicines;
 }
 
+// 3. Main Processing Route
 app.post('/api/process-medicine', async (req, res) => {
     const { prompt } = req.body;
     if (!prompt) return res.status(400).json({ error: "Prompt empty hai!" });
@@ -54,13 +61,14 @@ app.post('/api/process-medicine', async (req, res) => {
     const match = prompt.match(/(\d+)/);
     const totalCount = match ? parseInt(match[1]) : 0;
 
-    // --- PARALLEL LOGIC (NO CHANGES TO LOGIC) ---
+    // --- PARALLEL LOGIC (30+ items) ---
     if (totalCount > 30 && API_KEYS.length > 1) {
-        console.log(`⚡ Parallel Processing start for ${totalCount} items...`);
+        console.log(`⚡ Parallel Processing for ${totalCount} items (No Expiry Mode)`);
+        
         const half = Math.ceil(totalCount / 2);
         const prompts = [
-            `Generate ${half} popular medicines starting with letters A to M.`,
-            `Generate ${totalCount - half} popular medicines starting with letters N to Z.`
+            `Generate ${half} popular medicines (Alphabet A-M). No expiry field.`,
+            `Generate ${totalCount - half} popular medicines (Alphabet N-Z). No expiry field.`
         ];
 
         try {
@@ -72,10 +80,10 @@ app.post('/api/process-medicine', async (req, res) => {
             const results = await Promise.all(tasks);
             const combinedData = [...results[0], ...results[1]];
             
-            console.log(`✅ Parallel Success! Total items: ${combinedData.length}`);
+            console.log(`✅ Parallel Success! Items: ${combinedData.length}`);
             return res.json(combinedData);
         } catch (error) {
-            console.error("Parallel Error, falling back to single key...");
+            console.error("Parallel Error, trying fallback...");
         }
     }
 
@@ -83,21 +91,22 @@ app.post('/api/process-medicine', async (req, res) => {
     let lastError = null;
     for (let i = 0; i < API_KEYS.length; i++) {
         try {
+            console.log(`Using Key #${i+1} for: ${prompt}`);
             const data = await callGroq(API_KEYS[i], prompt);
             return res.json(data);
         } catch (error) {
-            console.error(`❌ Key #${i+1} failed, trying next...`);
+            console.error(`❌ Key #${i+1} failed.`);
             lastError = error;
         }
     }
 
-    res.status(500).json({ error: "Sari keys block hain.", details: lastError?.message });
+    res.status(500).json({ error: "All keys failed.", details: lastError?.message });
 });
 
-// --- VERCEL EXPORT (Important) ---
+// --- VERCEL EXPORT ---
 module.exports = app;
 
-// --- LOCAL SERVER START (Conditional) ---
+// --- LOCAL SERVER START ---
 if (process.env.NODE_ENV !== 'production') {
     const PORT = process.env.PORT || 3000;
     app.listen(PORT, () => console.log(`🚀 Local Server running on port ${PORT}`));
